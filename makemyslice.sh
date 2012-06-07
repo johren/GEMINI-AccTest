@@ -6,19 +6,50 @@ USERURN=`cat *-usercred.xml | grep owner_urn | sed -e 's/^ *//g;s/ *$//g' | sed 
 USERNAME=`echo $USERURN | awk -F"+" '{print $4}'`
 UNPREFIX=`echo $USERNAME | cut -c1-3`
 
-AM=pg-ky
+PREFIX=""
+RSPECPATH=""
+EXPDATE=""
+SLICENAME=""
+AGGREGATE="pg-ky"
 
-PREFIX=$1
-RSPECPATH=$2
-EXPDATE=$3
-
-if [ "${PREFIX}" = "" ]; then
-    echo "Must provide prefix to use in slice name"
+# options may be followed by one colon to indicate they have a required argument
+# p = prefix (required if no slicename provided)
+# r = rspec (required)
+# e = expiration date
+# a = aggregate
+# n = slicename (required if no prefix provided)
+if ! options=$(getopt -o p:r:e:a:n: -l prefix:,rspec:,exp:,agg:,slice: -- "$@")
+then
+    # something went wrong, getopt will put out an error message for us
     exit 1
 fi
 
-TIMESTAMP=`date +%y%m%d%H%M`
-SLICENAME="${UNPREFIX}${PREFIX}${TIMESTAMP}"
+set -- $options
+
+while [ $# -gt 0 ]
+do
+    case $1 in
+    -p|--prefix) PREFIX=`echo $2 | sed -e "s/'//g"` ; shift;;
+    -r|--rspec) RSPECPATH=`echo $2 | sed -e "s/'//g"`; shift;;
+    -e|--exp) EXPDATE=`echo $2 | sed -e "s/'//g"` ; shift;;
+    -a|--agg) AGGREGATE=`echo $2 | sed -e "s/'//g"` ; shift;;
+    -n|--slice) SLICENAME=`echo $2 | sed -e "s/'//g"` ; shift;;
+    (--) shift; break;;
+    (-*) echo "$0: error - unrecognized option $1" 1>&2; exit 1;;
+    (*) break;;
+    esac
+    shift
+done
+
+if [ "${SLICENAME}" == "" ]; then
+    if [ "${PREFIX}" = "" ]; then
+        echo "Must provide prefix to use in slice name"
+        exit 1
+    fi
+    TIMESTAMP=`date +%y%m%d%H%M`
+    SLICENAME="${UNPREFIX}${PREFIX}${TIMESTAMP}"
+fi
+
 if [ `echo ${SLICENAME} | wc -c` -gt 19 ]; then
     echo "Slice name ${SLICENAME} is too long"
     exit 1
@@ -34,6 +65,7 @@ if [ ! -r ${RSPECPATH} ]; then
     exit 1
 fi
 
+
 # Create the slice using OMNI
 echo "Creating slice ${SLICENAME}"
 CSLICEOUT=`${OMNIPATH} createslice ${SLICENAME} 2>&1`
@@ -47,8 +79,8 @@ fi
 
 # Create the sliver using OMNI
 echo "Creating sliver with rspec ${RSPECPATH}"
-CSLIVEROUT=`${OMNIPATH} -a ${AM} -n createsliver ${SLICENAME} ${RSPECPATH} 2>&1`
-echo "${OMNIPATH} -a ${AM} -n createsliver ${SLICENAME} ${RSPECPATH} 2>&1"
+CSLIVEROUT=`${OMNIPATH} -a ${AGGREGATE} -n createsliver ${SLICENAME} ${RSPECPATH} 2>&1`
+echo "${OMNIPATH} -a ${AGGREGATE} -n createsliver ${SLICENAME} ${RSPECPATH} 2>&1"
 RESULT=`echo ${CSLIVEROUT} | grep "Completed createsliver:"` 
 if [ "${RESULT}" = "" ]; then
     echo "Failed to create sliver for slice ${SLICENAME}"
@@ -58,7 +90,7 @@ fi
 
 # Wait for the sliver to be ready
 while true; do
-    ${OMNIPATH} -a ${AM} sliverstatus -n ${SLICENAME} > status.out 2>&1 
+    ${OMNIPATH} -a ${AGGREGATE} sliverstatus -n ${SLICENAME} > status.out 2>&1 
     if [ -r status.out ]; then
         # Check to see if some of them are ready
         sleep 1
@@ -80,16 +112,16 @@ done
 if [ "${EXPDATE}" != "" ]; then
     # Renew the slice
     echo "Renewing slice ${SLICENAME} to ${EXPDATE}"
-    RSLICEOUT=`${OMNIPATH} -a ${AM} -n renewslice ${SLICENAME} ${EXPDATE} 2>&1`
+    RSLICEOUT=`${OMNIPATH} -a ${AGGREGATE} -n renewslice ${SLICENAME} ${EXPDATE} 2>&1`
     echo $RSLICEOUT > renewout
     # Renew the sliver
     echo "Renewing sliver ${SLICENAME} to ${EXPDATE}"
-    RSLIVEROUT=`${OMNIPATH} -a ${AM} -n renewsliver ${SLICENAME} ${EXPDATE} 2>&1`
+    RSLIVEROUT=`${OMNIPATH} -a ${AGGREGATE} -n renewsliver ${SLICENAME} ${EXPDATE} 2>&1`
     echo $RSLIVEROUT >> renewout
 fi
 
 # Get the manifest
-${OMNIPATH} -a ${AM} listresources -o ${SLICENAME}
+${OMNIPATH} -a ${AGGREGATE} listresources -o ${SLICENAME}
 
 /opt/gcf/examples/readyToLogin.py ${SLICENAME}
 
